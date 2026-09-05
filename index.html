@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube 字幕同步播放器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        /* 隱藏 YouTube iframe 預設的黑邊 */
+        #player-container iframe { border-radius: 0.75rem; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center py-10 px-4">
+
+    <div class="w-full max-w-4xl space-y-6">
+        <!-- 標題區塊 -->
+        <div class="text-center space-y-2">
+            <h1 class="text-3xl font-bold text-white">YouTube 字幕同步器</h1>
+            <p class="text-gray-400">貼上影片網址，即可在下方自動同步顯示字幕</p>
+        </div>
+
+        <!-- 控制面板 -->
+        <div class="bg-gray-800 p-6 rounded-xl shadow-lg space-y-4">
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=..." 
+                    class="flex-1 px-4 py-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-400">
+                <button id="load-btn" 
+                    class="px-6 py-3 bg-blue-600 hover:bg-blue-700 transition font-semibold rounded-lg text-white">
+                    載入影片與字幕
+                </button>
+            </div>
+            
+            <!-- 訊息提示區塊 (替代 alert) -->
+            <div id="message-box" class="hidden text-sm p-3 rounded-lg font-medium"></div>
+        </div>
+
+        <!-- 影片與字幕顯示區塊 -->
+        <div id="content-area" class="hidden space-y-6">
+            <!-- 影片播放器容器 -->
+            <div id="player-container" class="aspect-video w-full bg-black rounded-xl shadow-2xl overflow-hidden flex items-center justify-center">
+                <div id="player"></div>
+            </div>
+
+            <!-- 字幕顯示面板 -->
+            <div class="bg-gray-800 p-8 rounded-xl shadow-lg border border-gray-700 min-h-[120px] flex items-center justify-center">
+                <p id="subtitle-display" class="text-2xl sm:text-3xl font-bold text-blue-400 text-center leading-relaxed">
+                    請點擊上方按鈕載入影片...
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 系統狀態變數
+        let player = null;
+        let subtitles = [];
+        let syncTimer = null;
+        let isApiReady = false;
+
+        // DOM 元素
+        const urlInput = document.getElementById('youtube-url');
+        const loadBtn = document.getElementById('load-btn');
+        const messageBox = document.getElementById('message-box');
+        const contentArea = document.getElementById('content-area');
+        const subtitleDisplay = document.getElementById('subtitle-display');
+
+        // 動態載入 YouTube 官方 API
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        // YouTube API 載入完成的回呼函式 (必須為全域)
+        window.onYouTubeIframeAPIReady = function() {
+            isApiReady = true;
+        };
+
+        // 顯示系統訊息 (成功、錯誤、處理中)
+        function showMessage(msg, type = 'info') {
+            messageBox.classList.remove('hidden', 'bg-red-900/50', 'text-red-400', 'bg-blue-900/50', 'text-blue-400', 'bg-green-900/50', 'text-green-400');
+            messageBox.textContent = msg;
+            
+            if (type === 'error') messageBox.classList.add('bg-red-900/50', 'text-red-400');
+            else if (type === 'success') messageBox.classList.add('bg-green-900/50', 'text-green-400');
+            else messageBox.classList.add('bg-blue-900/50', 'text-blue-400');
+        }
+
+        // 使用正則表達式精準擷取 11 碼影片 ID
+        function extractVideoId(url) {
+            const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+            const match = url.match(regex);
+            return match ? match[1] : null;
+        }
+
+        // 點擊載入按鈕事件
+        loadBtn.addEventListener('click', async () => {
+            const url = urlInput.value.trim();
+            const videoId = extractVideoId(url);
+
+            if (!videoId) {
+                showMessage("無法辨識影片網址，請確認連結是否正確。", "error");
+                return;
+            }
+
+            if (!isApiReady) {
+                showMessage("YouTube 播放器尚未準備好，請稍候再試。", "error");
+                return;
+            }
+
+            // UI 狀態切換
+            loadBtn.disabled = true;
+            loadBtn.textContent = "載入中...";
+            showMessage("正在從後端伺服器抓取字幕資料...", "info");
+            
+            // 重置狀態
+            subtitles = [];
+            subtitleDisplay.textContent = "準備播放...";
+
+            try {
+                // 呼叫 Netlify Serverless Function
+                // 注意：本地測試時可能會有路徑差異，部署至 Netlify 後會自動映射至 /.netlify/functions/
+                const response = await fetch(`/.netlify/functions/get-transcript?videoId=${videoId}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || "發生未知的錯誤");
+                }
+
+                // 儲存字幕資料，並格式化為毫秒方便比對
+                // 原始資料： { text: "...", duration: 2000, offset: 1500 } (單位: 毫秒)
+                subtitles = data.map(item => ({
+                    text: item.text,
+                    start: item.offset / 1000, // 轉為秒數
+                    end: (item.offset + item.duration) / 1000
+                }));
+
+                showMessage("字幕載入成功！", "success");
+                contentArea.classList.remove('hidden');
+                
+                // 初始化或載入影片
+                loadVideo(videoId);
+
+            } catch (error) {
+                showMessage(`錯誤: ${error.message}`, "error");
+            } finally {
+                loadBtn.disabled = false;
+                loadBtn.textContent = "載入影片與字幕";
+            }
+        });
+
+        // 載入或更新 YouTube 播放器
+        function loadVideo(videoId) {
+            if (player) {
+                player.loadVideoById(videoId);
+            } else {
+                player = new YT.Player('player', {
+                    videoId: videoId,
+                    width: '100%',
+                    height: '100%',
+                    playerVars: {
+                        'autoplay': 1,
+                        'controls': 1,
+                        'rel': 0, // 不顯示相關影片
+                        'fs': 1 // 允許全螢幕
+                    },
+                    events: {
+                        'onStateChange': onPlayerStateChange
+                    }
+                });
+            }
+        }
+
+        // 監聽播放器狀態改變
+        function onPlayerStateChange(event) {
+            // YT.PlayerState.PLAYING 狀態代碼為 1
+            if (event.data === 1) {
+                // 每 100 毫秒檢查一次字幕時間
+                if (!syncTimer) {
+                    syncTimer = setInterval(syncSubtitles, 100);
+                }
+            } else {
+                // 暫停、緩衝或停止時，清除計時器節省效能
+                if (syncTimer) {
+                    clearInterval(syncTimer);
+                    syncTimer = null;
+                }
+            }
+        }
+
+        // 核心同步邏輯
+        function syncSubtitles() {
+            if (!player || !player.getCurrentTime || subtitles.length === 0) return;
+
+            const currentTime = player.getCurrentTime();
+
+            // 尋找當前時間點對應的字幕 (使用時間區間判斷)
+            const activeLine = subtitles.find(line => 
+                currentTime >= line.start && currentTime <= line.end
+            );
+
+            // 如果有找到對應字幕，且與目前顯示的不同，才更新 DOM
+            if (activeLine) {
+                // 處理 html entities 例如 &amp; 轉譯的問題
+                let decodedText = activeLine.text.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                if (subtitleDisplay.textContent !== decodedText) {
+                    subtitleDisplay.textContent = decodedText;
+                }
+            } else {
+                // 如果目前時間沒有人在說話，清空顯示區
+                if (subtitleDisplay.textContent !== "") {
+                    subtitleDisplay.textContent = "...";
+                }
+            }
+        }
+    </script>
+</body>
+</html>

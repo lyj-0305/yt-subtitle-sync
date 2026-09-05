@@ -1,0 +1,12 @@
+{
+"name": "yt-subtitle-sync",
+"version": "1.0.0",
+"description": "YouTube Subtitle Sync with Netlify Functions",
+"main": "index.html",
+"scripts": {
+"test": "echo "Error: no test specified" && exit 1"
+},
+"dependencies": {
+"youtube-transcript": "^1.2.1"
+}
+}

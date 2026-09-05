@@ -1,4 +1,4 @@
-const { YoutubeTranscript } = require('youtube-transcript');
+const { fetchTranscript } = require('youtube-transcript');
 
 exports.handler = async (event, context) => {
   // 取得前端傳來的 videoId 參數
@@ -17,7 +17,7 @@ exports.handler = async (event, context) => {
 
   try {
     // 使用 youtube-transcript 套件抓取字幕資料
-    const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+    const transcript = await fetchTranscript(videoId);
     
     return {
       statusCode: 200,
